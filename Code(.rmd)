@@ -1,0 +1,180 @@
+---
+title: "RecSys"
+autor: "Nikki Sharma, Ran Huang"
+---
+
+- load the package that will be used in RecSys Project.
+  RMySQL: package for connecting to database.
+  recommenderlab: building the RecSys model.
+  ggplot2: data visualization
+  reshape: convert the data into realRatingMatrix
+```{r}
+library(RMySQL)
+library(readr)
+library(recommenderlab)
+library(ggplot2)
+library(reshape)
+library(dplyr)
+```
+
+- Connect to the database and select the data from the database.
+```{r}
+con = dbConnect(MySQL(),
+                user = "root", password = "",
+                dbname = "marvel", host = "127.0.0.1")
+result1 = dbSendQuery(con, "SELECT * FROM rating")
+ratings <- fetch(result1, n = -1)
+ratings <- ratings[,-1]
+ratings <- as.data.frame(ratings)
+head(ratings)
+```
+
+
+- the brief matrix about the ratings and movies info
+  The ratings data contains userId, MovieId, Rating, TimeStamp
+  the movies data contains MovieId, Title and Genres
+```{r}
+head(ratings)
+head(movies)
+```
+
+- Data visualization
+
+1. Histogram of Ratings
+  Most of the ratings viewed by users usually fall between 2.5 points and 4 points.
+  The median of the ratings and the mean of the ratings confirm the conclusion above.
+```{r}
+summary(ratings$rating)
+hist(ratings$rating, freq = T, breaks = c(0.5,1,1.5,2,2.5,3,3.5,4,4.5,5), labels = TRUE, xlab = "Ratings", ylab = "Frequency", main = "Distribution of Ratings")
+```
+
+2. Average ratings that movie gained in our data
+  Many movies in our data gain 3 and 3.5 average ratings in our dataset.
+  
+```{r}
+r <- ratings
+r <- summarise(group_by(r, movieId), ave = mean(rating))
+hist(r$ave, prob = F, xlab = "Average Ratings", ylab = "The number of Movies", main = "Average ratings for movies")
+```
+
+- Add Movie title columns to ratings data
+  Movies title is related to the movieId columns in rating data.
+```{r}
+i = 1
+ratings$movies <- NA
+while( i < nrow(ratings)+1){
+  movieid <- ratings$movieId[i]
+  row <- subset(movies, movieId == movieid)
+  
+  if(nrow(row)>0){
+    ratings$movies[i] <- row$title
+  }
+  i = i + 1
+}
+```
+```{r}
+head(ratings)
+```
+
+- Convert the ratings data to realRatingMatrix.
+  After converting, there are 610 users, 9719 movies, totally have 5928590 ratings in our data.
+  In the new matrix, a row represent a user and the ratings that he viewed in our data set.
+```{r}
+rating <- cast(ratings, userId ~ movies, value = "rating")
+rating.user <- rating[,-1]
+rating.user[1:3,1:6]
+class(rating.user) <- "data.frame"
+rating.user <- as.matrix(rating.user)
+rating.Matrix <- as(rating.user, "realRatingMatrix")
+```
+```{r}
+rating.Matrix
+rating.user[1:6,1:8]
+```
+
+- Compare the difference between UBCF and IBCF
+  Using the EvaluationScheme() function to devide the training set and testing set. 
+  The method we used is cross-validation, K = 10, which means the method is k-fold cross validation.
+  Parameter given is the number of item to consider in training set
+  Parameter goodRating is what raings can be seen as a good rating.
+  The scheme eval_ give the info about the evaluation.
+```{r}
+n_fold <- 10
+items_to_keep <- 15 # item to consider in training set
+rating_threshold <- 4 # good ratings
+eval_ <- evaluationScheme(data = rating.Matrix, method = "cross-validation", k = n_fold, given = items_to_keep, goodRating = rating_threshold)
+```
+```{r}
+eval_
+```
+
+- Using the scheme above, dividing the train, known, unknown by using getData() function in Recommenderlab package
+  Then we got the subset of the origin data.
+  All the train data, known data and unknown data is in realRatingMatrix format.
+```{r}
+train <- getData(eval_, "train")
+known <- getData(eval_, "known")
+unknown <- getData(eval_, "unknown")
+```
+
+- Building the model in method UBCF and IBCF
+  All of the model are in Recommender class and S4 Mode.
+```{r}
+model.ubcf <- Recommender(train, method = "UBCF")
+model.ibcf <- Recommender(train, method = "IBCF")
+```
+```{r}
+summary(model.ubcf)
+summary(model.ibcf)
+```
+
+- Using the Known and Unknown data to test the data
+  Using calcPreditionAccuracy() to calculate the error rate of each method.
+  RMSE: Root-mean-square Error. RMSE is a frequently used measure of the difference between values predicted by a model and he values actually observed from the environment that is being modeled. A lower RMSE is better than a higher one.
+  MSE: Mean-squared Error. MSE is to measure the average of the squares of the error.
+  MAE: Mean absolute Error. MAE is a measure of difference between two continuous variables.
+```{r}
+pred.ubcf <- predict(model.ubcf, known, type = "ratings")
+pred.ibcf <- predict(model.ibcf, known, type = "ratings")
+error = rbind(
+  calcPredictionAccuracy(pred.ubcf, unknown),
+  calcPredictionAccuracy(pred.ibcf, unknown)
+)
+rownames(error) <- c("UBCF", "IBCF")
+```
+```{r}
+error
+```
+
+- Using the Z-score method to normalize the data.
+  When can find the time consuming of the UBCF and IBCF, which are the method using for recommender movies to users.
+  UBCF has spent more time on the predicting nor building the model.
+  IBCF has spent much more time on the model rather than predict the result.
+  Parameter n means that the topN movies we would like to evaluate.
+```{r}
+algorithms <- list( 
+  "user-based CF" = list(name="UBCF", param=list(normalize = "Z-score", method="Cosine")),
+  "item-based CF" = list(name="IBCF", param=list(normalize = "Z-score", method="Cosine"))
+)
+result <- evaluate(eval_, algorithms, n = c(1,3,5))
+```
+```{r}
+result
+```
+
+- Using UBCF to recommend movies to users.
+```{r}
+ml.recommModel <- Recommender(data = train, method = "UBCF")
+top.ubcf <- predict(model.ubcf, known, n = 5)
+as(top.ubcf, "list")[1:7]
+```
+
+Conclustion:
+
+In this project, we used the function in Recommenderlab package to build the RecSys. Comparing the method in Ratings and TopN fields in order to find the most suitable method for our project.
+
+In ratings evaluate, we compare the error rate of different method, and we find that the UBCF with lower RMSE and MSE, which means that UBCF is more likely with our data set. Then, we also find that the Time it used to recommender movies is much more shorter than IBCF method. In sum up, we can say that the UBCF model is perfectly suited for our project.
+
+Finally, we using the UBCF model to recommender Top5 movies to users.
+
+There are also some shortages in our project. In future learning, we could still work on it.
